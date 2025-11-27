@@ -81,16 +81,40 @@ st.markdown("""
 def fetch_page(url):
     """Fetch webpage content with timeout and retry logic"""
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1'
     }
+    
+    session = requests.Session()
+    
     try:
-        response = requests.get(url, headers=headers, timeout=15)  # Increased timeout
+        # First try with standard timeout
+        response = session.get(url, headers=headers, timeout=20, allow_redirects=True)
         response.raise_for_status()
+        
+        # Check if we got valid HTML
+        if len(response.text) < 100:
+            raise Exception("Response too short - website may be blocking the request")
+        
         return response.text
+        
     except requests.Timeout:
-        raise Exception(f"Request timed out after 15 seconds. The website may be slow or unresponsive.")
+        raise Exception(f"⏱️ Request timed out after 20 seconds. This website is responding slowly. Try:\n- Testing with a faster-loading page\n- Running locally instead of Streamlit Cloud\n- The website may have rate limiting")
+    except requests.HTTPError as e:
+        if e.response.status_code == 403:
+            raise Exception(f"🚫 Access Forbidden (403). The website is blocking automated requests. This is common with sites that have bot protection.")
+        elif e.response.status_code == 429:
+            raise Exception(f"⚠️ Too Many Requests (429). The website has rate limiting. Wait a few minutes and try again.")
+        else:
+            raise Exception(f"❌ HTTP Error {e.response.status_code}: {str(e)}")
     except requests.RequestException as e:
-        raise Exception(f"Failed to fetch URL: {str(e)}")
+        raise Exception(f"🌐 Network Error: {str(e)}\n\nPossible causes:\n- Website is down\n- DNS resolution failed\n- SSL certificate issues")
+    finally:
+        session.close()
 
 def analyze_schema(soup):
     """Analyze structured data/schema markup"""
@@ -923,14 +947,75 @@ st.markdown("**Analyze your webpage for Answer Engine Optimization (AEO)** - opt
 st.markdown('<p class="main-header">🎯 AEO On-Page Auditor</p>', unsafe_allow_html=True)
 st.markdown("**Analyze your webpage for Answer Engine Optimization (AEO)** - optimize for AI search engines, featured snippets, and voice search.")
 
+# Add troubleshooting expander
+with st.expander("⚠️ Having timeout issues? Click here"):
+    st.markdown("""
+    **Common timeout causes on Streamlit Cloud:**
+    
+    1. **Website has bot protection** (Cloudflare, etc.)
+       - Solution: Run the app locally on your desktop
+    
+    2. **Website is slow to respond**
+       - Solution: Try a faster-loading competitor page
+       - The website might be under heavy load
+    
+    3. **Rate limiting**
+       - Solution: Wait 5-10 minutes between analyses
+       - Some sites limit automated requests
+    
+    4. **Specific website blocking Streamlit Cloud IPs**
+       - Solution: Download and run this app locally
+       - Use: `streamlit run app.py` on your computer
+    
+    **🖥️ To run locally (no timeouts):**
+    ```bash
+    # Install dependencies
+    pip install streamlit requests beautifulsoup4 textstat pandas plotly
+    
+    # Run the app
+    streamlit run app.py
+    ```
+    
+    **✅ Best for Streamlit Cloud:** Fast-loading blogs, news sites, and documentation pages
+    
+    **❌ May timeout on Cloud:** Heavy JavaScript sites, sites with bot protection, very slow servers
+    """)
+
 # Tabs for single vs comparison analysis
 tab1, tab2 = st.tabs(["📄 Single Page Analysis", "⚔️ Competitive Comparison"])
 
 with tab1:
     # Input
     url = st.text_input("Enter URL to Analyze", placeholder="https://example.com/article", key="single_url")
+    
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        analyze_btn = st.button("🔍 Analyze", type="primary", use_container_width=True, key="analyze_single")
+    
+    with col2:
+        test_btn = st.button("🔗 Test Connection", use_container_width=True, key="test_connection")
+    
+    # Test connection feature
+    if test_btn and url:
+        with st.spinner("Testing connection..."):
+            try:
+                import time
+                start_time = time.time()
+                html = fetch_page(url)
+                elapsed = time.time() - start_time
+                
+                st.success(f"✅ Connection successful! ({elapsed:.2f}s)")
+                st.info(f"📄 Page size: {len(html):,} characters\n\n🌐 Server responded in {elapsed:.2f} seconds")
+                
+                if elapsed > 10:
+                    st.warning("⚠️ This website is slow to respond. Analysis may take longer or timeout on Streamlit Cloud.")
+                
+            except Exception as e:
+                st.error(f"❌ Connection failed: {str(e)}")
+                st.info("💡 This URL will likely fail during full analysis. Try a different URL or run locally.")
 
-    if st.button("🔍 Analyze", type="primary", use_container_width=True, key="analyze_single"):
+    if analyze_btn:
         if not url:
             st.error("Please enter a URL")
         else:
@@ -1110,6 +1195,8 @@ with tab1:
 with tab2:
     st.markdown("### Compare Your Page Against Competitors")
     st.markdown("Analyze up to 4 pages simultaneously to see how you stack up against the competition.")
+    
+    st.warning("⚠️ **Note for Streamlit Cloud users:** Some websites may block requests from cloud services. If you experience timeouts, try:\n- Running the app locally on your computer\n- Using faster-loading competitor pages\n- Testing one URL at a time in Single Page Analysis tab")
     
     # Input fields for comparison
     col1, col2 = st.columns(2)
@@ -1433,4 +1520,5 @@ with tab2:
 st.markdown("---")
 st.markdown("**AEO On-Page Auditor** | Optimize your content for AI search engines like ChatGPT, Claude, Gemini, and Perplexity")
 st.markdown("**Pro Tip:** Use the Competitive Comparison tab to benchmark against your top competitors and identify gaps in your AEO strategy.")
+
 
