@@ -1,6 +1,6 @@
-streamlit==1.29.0
-requests==2.31.0
-beautifulsoup4==4.12.2
-textstat==0.7.3
-pandas==2.1.0
-plotly==5.17.0
+streamlit
+requests
+beautifulsoup4
+textstat
+pandas
+plotly
