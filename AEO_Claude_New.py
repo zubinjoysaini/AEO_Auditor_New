@@ -79,13 +79,18 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 def fetch_page(url):
-    """Fetch webpage content"""
+    """Fetch webpage content with timeout and retry logic"""
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     }
-    response = requests.get(url, headers=headers, timeout=10)
-    response.raise_for_status()
-    return response.text
+    try:
+        response = requests.get(url, headers=headers, timeout=15)  # Increased timeout
+        response.raise_for_status()
+        return response.text
+    except requests.Timeout:
+        raise Exception(f"Request timed out after 15 seconds. The website may be slow or unresponsive.")
+    except requests.RequestException as e:
+        raise Exception(f"Failed to fetch URL: {str(e)}")
 
 def analyze_schema(soup):
     """Analyze structured data/schema markup"""
@@ -99,6 +104,8 @@ def analyze_schema(soup):
     
     for script in schema_scripts:
         try:
+            if not script.string:
+                continue
             data = json.loads(script.string)
             if isinstance(data, list):
                 for item in data:
@@ -121,7 +128,7 @@ def analyze_schema(soup):
                     howto_count = len(data.get('step', []))
                 elif 'article' in schema_type:
                     article_present = True
-        except:
+        except (json.JSONDecodeError, AttributeError, TypeError):
             continue
     
     return {
@@ -188,44 +195,64 @@ def analyze_snippet_optimization(soup):
 
 def analyze_structure(soup):
     """Analyze content structure"""
-    text = soup.get_text()
-    
-    has_tldr = bool(re.search(r'(tl;?dr|summary|key takeaways)', text, re.IGNORECASE))
-    has_toc = bool(soup.find(['div', 'nav'], class_=re.compile('toc|table-of-contents', re.I)))
-    
-    paragraphs = soup.find_all('p')
-    if paragraphs:
-        total_words = sum(len(p.get_text().split()) for p in paragraphs)
-        avg_para_length = total_words / len(paragraphs)
-    else:
-        avg_para_length = 0
-    
-    word_count = len(text.split())
-    
     try:
-        flesch_score = textstat.flesch_reading_ease(text)
-    except:
-        flesch_score = 0
-    
-    return {
-        'has_tldr': has_tldr,
-        'has_toc': has_toc,
-        'avg_para_length': round(avg_para_length, 1),
-        'word_count': word_count,
-        'flesch_reading_ease': round(flesch_score, 1)
-    }
+        text = soup.get_text()
+        
+        has_tldr = bool(re.search(r'(tl;?dr|summary|key takeaways)', text, re.IGNORECASE))
+        has_toc = bool(soup.find(['div', 'nav'], class_=re.compile('toc|table-of-contents', re.I)))
+        
+        paragraphs = soup.find_all('p')
+        if paragraphs:
+            total_words = sum(len(p.get_text().split()) for p in paragraphs)
+            avg_para_length = total_words / len(paragraphs)
+        else:
+            avg_para_length = 0
+        
+        word_count = len(text.split())
+        
+        try:
+            # Limit text length for readability calculation to avoid timeouts
+            text_sample = text[:5000] if len(text) > 5000 else text
+            flesch_score = textstat.flesch_reading_ease(text_sample)
+        except Exception:
+            flesch_score = 0
+        
+        return {
+            'has_tldr': has_tldr,
+            'has_toc': has_toc,
+            'avg_para_length': round(avg_para_length, 1),
+            'word_count': word_count,
+            'flesch_reading_ease': round(flesch_score, 1)
+        }
+    except Exception as e:
+        # Return default values if analysis fails
+        return {
+            'has_tldr': False,
+            'has_toc': False,
+            'avg_para_length': 0,
+            'word_count': 0,
+            'flesch_reading_ease': 0
+        }
 
 def analyze_entities(soup):
-    """Basic entity extraction"""
-    text = soup.get_text()
-    words = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', text)
-    entities = list(set(words))
-    entities_found = len(entities)
-    
-    return {
-        'entities_found': entities_found,
-        'entity_examples': entities[:10]
-    }
+    """Basic entity extraction with performance optimization"""
+    try:
+        text = soup.get_text()
+        # Limit text processing to avoid timeout on very large pages
+        text_sample = text[:10000] if len(text) > 10000 else text
+        words = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', text_sample)
+        entities = list(set(words))
+        entities_found = len(entities)
+        
+        return {
+            'entities_found': entities_found,
+            'entity_examples': entities[:10]
+        }
+    except Exception:
+        return {
+            'entities_found': 0,
+            'entity_examples': []
+        }
 
 def analyze_eeat(soup, url):
     """Analyze E-E-A-T signals"""
@@ -907,7 +934,7 @@ with tab1:
         if not url:
             st.error("Please enter a URL")
         else:
-            with st.spinner("Analyzing webpage..."):
+            with st.spinner("Analyzing webpage... This may take 10-20 seconds."):
                 try:
                     # Fetch and analyze
                     html = fetch_page(url)
@@ -1073,8 +1100,12 @@ with tab1:
                         st.write(f"**Sources/References:** {'Yes' if eeat_data['has_sources'] else 'No'}")
                     
                 except Exception as e:
-                    st.error(f"Error analyzing URL: {str(e)}")
-                    st.info("Make sure the URL is accessible and returns valid HTML content.")
+                    st.error(f"❌ Error analyzing URL: {str(e)}")
+                    st.info("**Troubleshooting tips:**\n- Check if the URL is accessible in your browser\n- Some websites block automated requests\n- Try a different URL\n- The website might be temporarily down")
+                    
+                    # Show more details in expander
+                    with st.expander("Technical Details"):
+                        st.code(f"Error Type: {type(e).__name__}\nDetails: {str(e)}")
 
 with tab2:
     st.markdown("### Compare Your Page Against Competitors")
@@ -1105,12 +1136,13 @@ with tab2:
         if len(urls_to_compare) < 2:
             st.error("Please enter at least 2 URLs to compare (Your URL + at least 1 competitor)")
         else:
+            st.info(f"⏱️ Analyzing {len(urls_to_compare)} pages... This may take 30-60 seconds depending on page size and server response time.")
             results_dict = {}
             progress_bar = st.progress(0)
             status_text = st.empty()
             
             for idx, (name, url) in enumerate(urls_to_compare.items()):
-                status_text.text(f"Analyzing {name}...")
+                status_text.text(f"Analyzing {name}... ({idx + 1}/{len(urls_to_compare)})")
                 progress_bar.progress((idx + 1) / len(urls_to_compare))
                 
                 try:
@@ -1146,7 +1178,8 @@ with tab2:
                     }
                     
                 except Exception as e:
-                    st.warning(f"Could not analyze {name}: {str(e)}")
+                    st.warning(f"⚠️ Could not analyze {name}: {str(e)}")
+                    st.caption(f"URL: {url}")
                     continue
             
             progress_bar.empty()
@@ -1400,3 +1433,4 @@ with tab2:
 st.markdown("---")
 st.markdown("**AEO On-Page Auditor** | Optimize your content for AI search engines like ChatGPT, Claude, Gemini, and Perplexity")
 st.markdown("**Pro Tip:** Use the Competitive Comparison tab to benchmark against your top competitors and identify gaps in your AEO strategy.")
+
